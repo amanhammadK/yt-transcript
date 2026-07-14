@@ -1,0 +1,80 @@
+name: Node.js CI/CD
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "20.x"
+        required: false
+        description: "Node.js version to use"
+      test-script:
+        type: string
+        default: "test"
+        required: false
+        description: "Package.json test script to run"
+
+jobs:
+  test-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Validate nxm.yaml
+        run: |
+          python -c "
+          import json, yaml, sys, os
+          from jsonschema import validate
+          try:
+              if not os.path.exists('nxm.yaml'):
+                  raise FileNotFoundError('nxm.yaml not found')
+              with open('nxm.yaml') as f:
+                  data = yaml.safe_load(f)
+              schema_url = 'https://raw.githubusercontent.com/nxm/nxm-ci-templates/main/schemas/nxm.schema.json'
+              schema_paths = ['schemas/nxm.schema.json', 'nxm-ci-templates/schemas/nxm.schema.json']
+              schema = None
+              for path in schema_paths:
+                  if os.path.exists(path):
+                      with open(path) as sf:
+                          schema = json.load(sf)
+                      break
+              if schema is None:
+                  import urllib.request
+                  try:
+                      with urllib.request.urlopen(schema_url, timeout=5) as response:
+                          schema = json.loads(response.read().decode())
+                  except Exception as url_err:
+                      raise FileNotFoundError(f'Schema file not found locally at paths {schema_paths} and failed to download from {schema_url}: {url_err}')
+              validate(instance=data, schema=schema)
+              print('nxm.yaml is valid.')
+          except Exception as e:
+              print(f'Validation failed: {e}')
+              sys.exit(1)
+          "
+
+      - name: Lint Code
+        run: |
+          npm run lint || npx eslint src/
+
+      - name: Verify TypeScript Types
+        run: |
+          npx tsc --noEmit
+
+      - name: Run Tests
+        run: |
+          npm run ${{ inputs.test-script }}
